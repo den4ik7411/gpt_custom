@@ -34,7 +34,7 @@ Here you can custom your chat process with:
   /new - erase the dialogue history
   /char - send text prompt for change GPT character
 Type text prompt to start
-  """#/char - send text prompt for change GPT character         IN THE NEXT UPDATES
+  """#/char - change GPT character                       IN THE NEXT UPDATES
   #/add - add your character's prompt to char menu
 
 conn = sqlite3.connect('db.db')
