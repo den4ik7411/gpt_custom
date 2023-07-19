@@ -28,7 +28,7 @@ default = [{"role": "system", "content": "pretend youre a cute anime girl who ta
 
 default_n = ""
 welcome = """
-Welcome to Adolf!
+Welcome to BOT NAME!
 Here you can custom your chat process with: 
 
   /new - erase the dialogue history
