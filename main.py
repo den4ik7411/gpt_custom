@@ -1,17 +1,16 @@
-
-# NOW, BOT IS WORKING! BUT IT IS PROTOTYPE
+import json
+import openai
+import sqlite3
+import time
 
 from aiogram import Bot, Dispatcher, executor, types
-import json, openai, sqlite3, time
-from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
 from aiogram.contrib.fsm_storage.memory import MemoryStorage
 from aiogram.dispatcher import FSMContext
 from aiogram.dispatcher.filters.state import State, StatesGroup
-
-
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
 
 API_TOKEN = ''
-openai.api_key = ""
+openai.api_key = ''
 
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher(bot, storage=MemoryStorage())
@@ -28,22 +27,21 @@ default = [{"role": "system", "content": "pretend youre a cute anime girl who ta
 
 default_n = ""
 welcome = """
-Welcome to BOT NAME!
+Welcome to GPT-3 customizer bot!
 Here you can custom your chat process with: 
 
-  /new - erase the dialogue history
-  /char - send text prompt for change GPT character
+  NEW - erase the dialogue history
+  CREATE - create your GPT character
+  PERS - change your GPT personality
+  
 Type text prompt to start
-  """#/char - change GPT character                       IN THE NEXT UPDATES
-  #/add - add your character's prompt to char menu
-
+"""
 conn = sqlite3.connect('db.db')
 c = conn.cursor()
 c.execute('''
           CREATE TABLE IF NOT EXISTS users
           ([usr_id] INTEGER PRIMARY KEY, [hist] INTEGER)
           ''')
-
 
 def LoadUsers():
     global users
@@ -53,14 +51,14 @@ def LoadUsers():
     c = conn.cursor()
     c.execute("""SELECT * from users""")
     records = c.fetchall()
+    print(f'LoadUsers() {len(records)}')
     for r in records:
         users[r[0]] = {}
         users[r[0]]['hist'] = r[1]
-
-
+    return len(records)
 LoadUsers()
 
-def create_user(user: int, num: int):
+def create_user(user: int   , num: int):
     global conn
     users[user] = {}
     users[user]['hist'] = num
@@ -71,16 +69,15 @@ def create_user(user: int, num: int):
                 VALUES
                 (?, ?);
           '''
-
     data_tuple = (user, num)
     c.execute(sqlite_insert_with_param, data_tuple)
     conn.commit()
     with open('data.json', 'r', encoding='utf8') as fr:
         try:
             usr_data = list(json.load(fr))
-            usr_data.append({"hist":  default})
+            usr_data.append({"hist":  default, "char": []})
         except:
-            usr_data = [{"hist": default}]
+            usr_data = [{"hist": default, "char": []}]
     with open('data.json', 'w', encoding='utf8') as fg:
         json.dump(usr_data, fg, ensure_ascii=False, indent=2)
 
@@ -88,19 +85,35 @@ def check_time():
     global time1
     time1 = time.time()
 
-char_b = KeyboardButton('/char')
-kb = ReplyKeyboardMarkup.add(char_b)
+def clear_hist(num, change, char_num):
+    with open('data.json', 'r', encoding='utf8') as fr:
+        usr_data = list(json.load(fr))
+        if change == False:
+            usr_data[num]["hist"] = default
+        else:
+            usr_data[num]["hist"] = [{"role":"system", "content":usr_data[num]["char"][char_num]["prompt"]}]
+        with open('data.json', 'w', encoding='utf8') as fw:
+            json.dump(usr_data, fw, ensure_ascii=False, indent=2)
 
-@dp.message_handler(commands=['start'])
+create_b = InlineKeyboardButton(text='CREATE', callback_data='create')
+new_b = InlineKeyboardButton(text='NEW', callback_data='new')
+char_b = InlineKeyboardButton(text='PERS', callback_data='char')
+show_b = InlineKeyboardButton(text="SHOW PROMPT",callback_data="show")
+del_b = InlineKeyboardButton(text="DELETE", callback_data="delete")
+menu = ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True).add(KeyboardButton(text="/menu"))
+kb = InlineKeyboardMarkup().add(create_b,new_b,char_b)
+del_kb = InlineKeyboardMarkup().add(del_b).add(create_b,new_b,char_b)
+show_kb = InlineKeyboardMarkup().add(show_b, del_b).add(create_b,new_b,char_b)
+
+@dp.message_handler(commands=['start', 'menu'])
 async def send_welcome(message: types.Message):
     if message.from_user.id not in users:
-        create_user(int(message.from_user.id), len(c.fetchall()))
-    await bot.send_message(chat_id=message.from_user.id, text=welcome)
+        create_user(int(message.from_user.id), LoadUsers())
+    await bot.send_message(chat_id=message.from_user.id, text=welcome, reply_markup=kb)
 
-@dp.message_handler(commands=['char'])
-async def char(message: types.Message):
-    await bot.send_message(chat_id = message.from_user.id, text ="Choose a personality of GPT: \n"
-                                                                 "(Send name at first)", reply_markup=kb)
+@dp.callback_query_handler(lambda c: c.data and c.data.startswith('create'))
+async def create_cb(message: types.CallbackQuery):
+    await message.message.edit_text("Choose a personality of GPT: \n(Send name at first)")
     await States.char_n.set()
 
 @dp.message_handler(state=States.char_n)
@@ -108,24 +121,91 @@ async def char_n_change(message: types.Message, state: FSMContext):
     global character
     character = [str(message.text)]
     await state.finish()
-    await bot.send_message(chat_id=message.from_user.id, text="Character name changed. \n"
-                                                              "(Send prompt for gpt's character)")
+    await message.answer("Personality's name changed. \n(Send prompt for gpt's personality)")
     await States.char.set()
 
 @dp.message_handler(state=States.char)
 async def char_change(message: types.Message, state: FSMContext):
     character.append(str(message.text))
     await state.finish()
-
-@dp.message_handler(commands=['new'])
-async def new_dialog(message: types.Message):
-    num = int(users[message.from_user.id]["hist"])
+    await message.answer("Character created", reply_markup=kb)
     with open('data.json', 'r', encoding='utf8') as fr:
         usr_data = list(json.load(fr))
-        usr_data[num]["hist"] = default
-    with open('data.json', 'w', encoding='utf8') as fw:
-        json.dump(usr_data, fw, ensure_ascii=False, indent=2)
-    await message.answer("Memory cleared")
+        usr_data[int(users[message.from_user.id]["hist"])]['char'].append({"name":f"{character[0]}",
+                                                                           "prompt":f"{character[1]}"})
+        with open('data.json', 'w', encoding='utf8') as fw:
+            json.dump(usr_data, fw, ensure_ascii=False, indent=2)
+
+    character.clear()
+
+@dp.callback_query_handler(lambda c: c.data and c.data.startswith('delete'))
+async def delete_char(message: types.CallbackQuery):
+    try:
+        with open('data.json', 'r', encoding='utf8') as fr:
+            usr_data = list(json.load(fr)); i = 0
+            for j in usr_data[int(users[message.from_user.id]["hist"])]['char']:
+                if j == chars[0]:
+                    usr_data[int(users[message.from_user.id]["hist"])]['char'].pop(i)
+                i += 1
+            clear_hist(int(users[message.from_user.id]["hist"]), False, None)
+            with open('data.json', 'w', encoding='utf8') as fw:
+                json.dump(usr_data, fw, ensure_ascii=False, indent=2)
+        await message.message.edit_text("Personality was delete", reply_markup=kb)
+    except:
+        await message.message.edit_text("Error. Please try again later", reply_markup=kb)
+        chars.clear()
+
+@dp.callback_query_handler(lambda c: c.data and c.data.startswith('new'))
+async def new_cb(message: types.CallbackQuery):
+    clear_hist(int(users[message.from_user.id]["hist"]), False, None)
+    await message.message.edit_text("Memory cleared", reply_markup=kb)
+
+@dp.callback_query_handler(lambda c: c.data and c.data.startswith('char'))
+async def char_cb(message: types.CallbackQuery):
+    try:
+        LoadUsers()
+        with open('data.json', 'r', encoding='utf8') as fr:
+            usr_data = list(json.load(fr))
+        global chars
+        chars = [];names = "";i = 0
+        choose_kb = InlineKeyboardMarkup()
+        while i != len(usr_data[int(users[message.from_user.id]["hist"])]['char']):
+            chars.append({"name":usr_data[int(users[message.from_user.id]["hist"])]['char'][i]['name'],
+                          "prompt":usr_data[int(users[message.from_user.id]["hist"])]['char'][i]["prompt"]})
+            ch_name = chars[i]["name"]
+            names += f"{i} - {ch_name} \n"
+            x = InlineKeyboardButton(f"{i}", callback_data=str(i))
+            choose_kb.add(x)
+            i += 1
+        if chars == []:
+            await message.message.edit_text("You don't have any personalities", reply_markup=kb)
+        else:
+            await message.message.edit_text(f"Your personalities:\n\n{names}\n  Type number of personality to choose",
+                                         reply_markup=choose_kb)
+    except:
+        await message.message.edit_text("Error. Please try again later", reply_markup=kb)
+
+@dp.callback_query_handler(lambda c: c.data and c.data.startswith('show'))
+async def show_cb(message: types.CallbackQuery):
+    name = chars[0]["name"]
+    prompt = chars[0]["prompt"]
+    await message.message.edit_text(f"{name} : {prompt}", reply_markup=del_kb)
+
+@dp.callback_query_handler(lambda c: c.data)
+async def char_choose_cb(message: types.CallbackQuery):
+    try:
+        i = 0
+        clear_hist(int(users[message.from_user.id]["hist"]), True, int(message.data))
+        while i <= len(chars):
+            for j in chars:
+                if i == int(message.data):
+                    char = chars[i]
+                    chars.clear()
+                    chars.append(char)
+                i += 1
+        await message.message.edit_text(f"You choose  :  {char['name']}", reply_markup=show_kb)
+    except:
+        await message.message.edit_text("Type correct number of personality or try again later", reply_markup=kb)
 
 @dp.message_handler(content_types=["text"])
 async def gpt_working(message: types.Message):
@@ -136,25 +216,19 @@ async def gpt_working(message: types.Message):
         try:
             print(time0-time1)
             with open('data.json', 'r', encoding='utf8') as fr:
-                gpt_prompt = json.load(fr)
-                gpt_prompt[users[message.from_user.id]["hist"]]["hist"].append({'role':"user", "content": f"{message.text}"})
-                with open('data.json', 'w', encoding='utf8') as fw:
-                    json.dump(gpt_prompt, fw, ensure_ascii=False, indent=2)
-            with open('data.json', 'r', encoding='utf8') as fr:
-                gpt_prompt = json.load(fr)
+                gpt_prompt = list(json.load(fr))
+                gpt_prompt[int(users[message.from_user.id]["hist"])]["hist"].append({'role':"user", "content": f"{message.text}"})
             response = openai.ChatCompletion.create(
                 model="gpt-3.5-turbo",
                 messages=list(gpt_prompt[users[message.from_user.id]["hist"]]["hist"]))
             response = response["choices"][0]["message"]["content"]
-            await message.answer(response, reply_markup=kb)                 )
+            await message.answer(response, reply_markup=menu)
             gpt_prompt[int(users[message.from_user.id]["hist"])]['hist'].append({"role": "assistant", "content": f"{response}"})
             with open('data.json', 'w', encoding='utf8') as fg:
                 json.dump(gpt_prompt, fg, ensure_ascii=False, indent=2)
-            character.clear()
             check_time()
-        except Exception:
-            await bot.send_message(chat_id=message.from_user.id, text='Error generating response. Please try later.')
-
+        except:
+            await message.answer('Error generating response. Please try later.', reply_markup=kb)
 
 if __name__ == "__main__":
     executor.start_polling(dp, skip_updates=True)
