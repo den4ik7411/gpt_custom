@@ -28,11 +28,11 @@ default = [{"role": "system", "content": "pretend youre a cute anime girl who ta
 default_n = ""
 welcome = """
 Welcome to GPT-3 customizer bot!
-Here you can custom your chat process with: 
+Here you can customize your chat process with: 
 
-  NEW - erase the dialogue history
   CREATE - create your GPT character
-  PERS - change your GPT personality
+  NEW - erase dialog history
+  CHOOSE - change your GPT character
   
 Type text prompt to start
 """
@@ -51,24 +51,19 @@ def LoadUsers():
     c = conn.cursor()
     c.execute("""SELECT * from users""")
     records = c.fetchall()
-    print(f'LoadUsers() {len(records)}')
+    print(f'Users: {len(records)}')
     for r in records:
         users[r[0]] = {}
         users[r[0]]['hist'] = r[1]
     return len(records)
 LoadUsers()
 
-def create_user(user: int   , num: int):
+def create_user(user: int, num: int):
     global conn
     users[user] = {}
     users[user]['hist'] = num
-
     sqlite_insert_with_param = '''
-          INSERT INTO users (usr_id, hist)
-
-                VALUES
-                (?, ?);
-          '''
+          INSERT INTO users (usr_id, hist) VALUES (?, ?);'''
     data_tuple = (user, num)
     c.execute(sqlite_insert_with_param, data_tuple)
     conn.commit()
@@ -97,7 +92,7 @@ def clear_hist(num, change, char_num):
 
 create_b = InlineKeyboardButton(text='CREATE', callback_data='create')
 new_b = InlineKeyboardButton(text='NEW', callback_data='new')
-char_b = InlineKeyboardButton(text='PERS', callback_data='char')
+char_b = InlineKeyboardButton(text='CHOOSE', callback_data='char')
 show_b = InlineKeyboardButton(text="SHOW PROMPT",callback_data="show")
 del_b = InlineKeyboardButton(text="DELETE", callback_data="delete")
 menu = ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True).add(KeyboardButton(text="/menu"))
@@ -109,34 +104,54 @@ show_kb = InlineKeyboardMarkup().add(show_b, del_b).add(create_b,new_b,char_b)
 async def send_welcome(message: types.Message):
     if message.from_user.id not in users:
         create_user(int(message.from_user.id), LoadUsers())
-    await bot.send_message(chat_id=message.from_user.id, text=welcome, reply_markup=kb)
+    await message.delete()
+    await message.answer(welcome, reply_markup=kb)
 
 @dp.callback_query_handler(lambda c: c.data and c.data.startswith('create'))
 async def create_cb(message: types.CallbackQuery):
-    await message.message.edit_text("Choose a personality of GPT: \n(Send name at first)")
-    await States.char_n.set()
+    global last_msg
+    with open('data.json', 'r', encoding='utf8') as fr:
+        usr_data = list(json.load(fr));i = 0;chrs = []
+    while i != len(usr_data[int(users[message.from_user.id]["hist"])]['char']):
+        chrs.append({"name": usr_data[int(users[message.from_user.id]["hist"])]['char'][i]['name'],
+                      "prompt": usr_data[int(users[message.from_user.id]["hist"])]['char'][i]["prompt"]})
+        i += 1
+    if len(chrs) == 5:
+        await message.message.edit_text("You cannot create more than five characters", reply_markup=kb)
+    else:
+        last_msg = await message.message.edit_text("Send name at first\n(no more than 25 symbols)")
+        await States.char_n.set()
 
 @dp.message_handler(state=States.char_n)
 async def char_n_change(message: types.Message, state: FSMContext):
-    global character
-    character = [str(message.text)]
-    await state.finish()
-    await message.answer("Personality's name changed. \n(Send prompt for gpt's personality)")
-    await States.char.set()
+    global character, last_msg
+    if len(message.text) <= 25:
+        character = [str(message.text)]
+        await state.finish()
+        await bot.delete_message(chat_id=message.from_user.id, message_id=message.message_id)
+        await message.answer(f"Name: {message.text}. Send prompt for gpt's personality\n(no more than 250")
+        await States.char.set()
+    else:
+        await bot.delete_message(chat_id=message.from_user.id, message_id=message.message_id)
+        await message.answer("Write name shorter than 25 symbols: ")
 
 @dp.message_handler(state=States.char)
 async def char_change(message: types.Message, state: FSMContext):
-    character.append(str(message.text))
-    await state.finish()
-    await message.answer("Character created", reply_markup=kb)
-    with open('data.json', 'r', encoding='utf8') as fr:
-        usr_data = list(json.load(fr))
-        usr_data[int(users[message.from_user.id]["hist"])]['char'].append({"name":f"{character[0]}",
-                                                                           "prompt":f"{character[1]}"})
-        with open('data.json', 'w', encoding='utf8') as fw:
-            json.dump(usr_data, fw, ensure_ascii=False, indent=2)
-
-    character.clear()
+    if len(message.text) <= 250:
+        character.append(str(message.text))
+        await state.finish()
+        await bot.delete_message(chat_id=message.from_user.id, message_id=message.message_id)
+        await message.answer("Character created", reply_markup=kb)
+        with open('data.json', 'r', encoding='utf8') as fr:
+            usr_data = list(json.load(fr))
+            usr_data[int(users[message.from_user.id]["hist"])]['char'].append({"name":f"{character[0]}",
+                                                                               "prompt":f"{character[1]}"})
+            with open('data.json', 'w', encoding='utf8') as fw:
+                json.dump(usr_data, fw, ensure_ascii=False, indent=2)
+        character.clear()
+    else:
+        await bot.delete_message(chat_id=message.from_user.id, message_id=message.message_id)
+        await message.answer("Write prompt shorter than 250 symbols: ")
 
 @dp.callback_query_handler(lambda c: c.data and c.data.startswith('delete'))
 async def delete_char(message: types.CallbackQuery):
@@ -147,9 +162,9 @@ async def delete_char(message: types.CallbackQuery):
                 if j == chars[0]:
                     usr_data[int(users[message.from_user.id]["hist"])]['char'].pop(i)
                 i += 1
-            clear_hist(int(users[message.from_user.id]["hist"]), False, None)
             with open('data.json', 'w', encoding='utf8') as fw:
                 json.dump(usr_data, fw, ensure_ascii=False, indent=2)
+        clear_hist(int(users[message.from_user.id]["hist"]), False, None)
         await message.message.edit_text("Personality was delete", reply_markup=kb)
     except:
         await message.message.edit_text("Error. Please try again later", reply_markup=kb)
@@ -163,7 +178,6 @@ async def new_cb(message: types.CallbackQuery):
 @dp.callback_query_handler(lambda c: c.data and c.data.startswith('char'))
 async def char_cb(message: types.CallbackQuery):
     try:
-        LoadUsers()
         with open('data.json', 'r', encoding='utf8') as fr:
             usr_data = list(json.load(fr))
         global chars
@@ -173,8 +187,8 @@ async def char_cb(message: types.CallbackQuery):
             chars.append({"name":usr_data[int(users[message.from_user.id]["hist"])]['char'][i]['name'],
                           "prompt":usr_data[int(users[message.from_user.id]["hist"])]['char'][i]["prompt"]})
             ch_name = chars[i]["name"]
-            names += f"{i} - {ch_name} \n"
-            x = InlineKeyboardButton(f"{i}", callback_data=str(i))
+            names += f"{i+1} - {ch_name} \n"
+            x = InlineKeyboardButton(f"{i+1}", callback_data=str(i))
             choose_kb.add(x)
             i += 1
         if chars == []:
@@ -214,7 +228,6 @@ async def gpt_working(message: types.Message):
         await message.answer("Don't send requests so fast. \nPlease try again in 20 seconds")
     else:
         try:
-            print(time0-time1)
             with open('data.json', 'r', encoding='utf8') as fr:
                 gpt_prompt = list(json.load(fr))
                 gpt_prompt[int(users[message.from_user.id]["hist"])]["hist"].append({'role':"user", "content": f"{message.text}"})
